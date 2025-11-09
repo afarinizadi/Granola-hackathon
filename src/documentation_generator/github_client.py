@@ -19,6 +19,16 @@ class GitHubClient:
             github_token: Optional GitHub personal access token for higher rate limits
         """
         self.github_token = github_token or os.getenv('GITHUB_TOKEN')
+
+        # Filter out placeholder tokens
+        if self.github_token and (
+            'your_' in self.github_token.lower() or
+            'placeholder' in self.github_token.lower() or
+            len(self.github_token) < 20
+        ):
+            print("Warning: Invalid GitHub token detected, proceeding without authentication")
+            self.github_token = None
+
         self.github = Github(self.github_token) if self.github_token else Github()
 
     def parse_repo_url(self, repo_url: str) -> tuple[str, str]:
@@ -86,7 +96,7 @@ class GitHubClient:
 
     def _build_file_tree(self, repo) -> Dict:
         """
-        Build a hierarchical file tree of the repository
+        Build a hierarchical file tree of the repository (simplified for rate limits)
 
         Args:
             repo: PyGithub repository object
@@ -95,27 +105,23 @@ class GitHubClient:
             Dictionary representing the file tree structure
         """
         try:
+            # Only fetch root level to reduce API calls
             contents = repo.get_contents("")
             tree = {'dirs': {}, 'files': []}
 
-            def process_contents(contents_list, current_tree, path=""):
-                for content in contents_list:
-                    if content.type == "dir":
-                        dir_name = content.name
-                        current_tree['dirs'][dir_name] = {'dirs': {}, 'files': [], 'path': content.path}
-                        try:
-                            subcontents = repo.get_contents(content.path)
-                            process_contents(subcontents, current_tree['dirs'][dir_name], content.path)
-                        except GithubException:
-                            pass  # Skip if we can't access the directory
-                    else:
-                        current_tree['files'].append({
-                            'name': content.name,
-                            'path': content.path,
-                            'size': content.size
-                        })
+            for content in contents:
+                if content.type == "dir":
+                    tree['dirs'][content.name] = {
+                        'path': content.path,
+                        'note': 'Directory listing limited to save API calls'
+                    }
+                else:
+                    tree['files'].append({
+                        'name': content.name,
+                        'path': content.path,
+                        'size': content.size
+                    })
 
-            process_contents(contents, tree)
             return tree
 
         except GithubException as e:
