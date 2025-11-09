@@ -1,28 +1,30 @@
 """
-Claude API Integration
-Handles interactions with the Claude API for codebase analysis
+Claude API Integration via AWS Bedrock
+Handles interactions with Claude via AWS Bedrock for codebase analysis
 """
 import os
+import json
 from typing import Optional
-from anthropic import Anthropic, APIError
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 
 class ClaudeClient:
-    """Client for interacting with Claude API"""
+    """Client for interacting with Claude via AWS Bedrock"""
 
     def __init__(self, api_key: Optional[str] = None):
         """
-        Initialize Claude API client
+        Initialize Claude client for AWS Bedrock
 
         Args:
-            api_key: Optional Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
+            api_key: Optional (kept for compatibility, uses AWS credentials instead)
         """
-        self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required")
-
-        self.client = Anthropic(api_key=self.api_key)
-        self.model = "claude-sonnet-4-20250514"  # Latest Claude model
+        # Get AWS region from environment variable, default to us-east-1
+        aws_region = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+        
+        # Use AWS credentials from environment or AWS profile
+        self.client = boto3.client('bedrock-runtime', region_name=aws_region)
+        self.model_id = "anthropic.claude-3-sonnet-20240229-v1:0"  # Claude 3 Sonnet on Bedrock
         self.max_tokens = 4096
 
     def analyze_codebase(
@@ -74,28 +76,38 @@ User's Request:
 
 Please analyze the codebase and respond to the user's request."""
 
-            # Make the API call
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[
+            # Make the API call to Bedrock
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": self.max_tokens,
+                "temperature": temperature,
+                "system": system_prompt,
+                "messages": [
                     {
                         "role": "user",
                         "content": user_message
                     }
                 ]
+            }
+
+            response = self.client.invoke_model(
+                modelId=self.model_id,
+                body=json.dumps(body),
+                contentType='application/json',
+                accept='application/json'
             )
 
+            # Parse the response
+            response_body = json.loads(response['body'].read())
+            
             # Extract and return the response text
-            if message.content and len(message.content) > 0:
-                return message.content[0].text
+            if response_body.get('content') and len(response_body['content']) > 0:
+                return response_body['content'][0]['text']
             else:
                 return "No response generated"
 
-        except APIError as e:
-            raise Exception(f"Claude API error: {str(e)}")
+        except (ClientError, BotoCoreError) as e:
+            raise Exception(f"AWS Bedrock error: {str(e)}")
         except Exception as e:
             raise Exception(f"Failed to analyze codebase: {str(e)}")
 
@@ -146,35 +158,23 @@ User's Request:
 
 Please analyze the codebase and respond to the user's request."""
 
-            # Make streaming API call
-            with self.client.messages.stream(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=temperature,
-                system=system_prompt,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": user_message
-                    }
-                ]
-            ) as stream:
-                for text in stream.text_stream:
-                    yield text
+            # Note: Streaming not supported in this simplified AWS Bedrock implementation
+            # Fall back to regular API call
+            return self.analyze_codebase(codebase_context, user_prompt, temperature)
 
-        except APIError as e:
-            raise Exception(f"Claude API error: {str(e)}")
+        except (ClientError, BotoCoreError) as e:
+            raise Exception(f"AWS Bedrock error: {str(e)}")
         except Exception as e:
             raise Exception(f"Failed to analyze codebase: {str(e)}")
 
-    def set_model(self, model: str):
+    def set_model(self, model_id: str):
         """
-        Set the Claude model to use
+        Set the Claude model to use on Bedrock
 
         Args:
-            model: Model identifier (e.g., 'claude-sonnet-4-20250514')
+            model_id: Bedrock model identifier (e.g., 'anthropic.claude-3-sonnet-20240229-v1:0')
         """
-        self.model = model
+        self.model_id = model_id
 
     def set_max_tokens(self, max_tokens: int):
         """
